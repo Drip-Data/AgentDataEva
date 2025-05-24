@@ -1,0 +1,11 @@
+numpy>=1.21.0
+pandas>=1.3.0
+matplotlib>=3.4.0
+seaborn>=0.11.0
+python-dateutil>=2.8.0
+
+# Optional LLM provider dependencies
+# Install as needed:
+# pip install openai>=1.0.0        # For OpenAI GPT evaluation
+# pip install anthropic>=0.7.0     # For Anthropic Claude evaluation
+# pip install google-generativeai>=0.3.0 
