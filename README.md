@@ -3,7 +3,7 @@
 <div align="center">
 
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
-![LLM](https://img.shields.io/badge/LLM-OpenAI%20%7C%20Anthropic%20%7C%20Gemini-orange.svg)
+![LLM](https://img.shields.io/badge/LLM-OpenAI%20%7C%20Anthropic%20%7C%20Gemini%20%7C%20DeepSeek-orange.svg)
 
 **A comprehensive, production-ready framework for evaluating AI agent performance with both quantitative metrics and LLM-powered qualitative assessments.**
 
@@ -19,7 +19,7 @@ The **Advanced Step-wise Agent Evaluation Framework** is a cutting-edge evaluati
 
 - **🔢 Quantitative Analysis**: 50+ metrics across 6 categories (efficiency, error recovery, task completion, code quality, tool usage, planning)
 - **🧠 LLM-Powered Evaluation**: AI-driven assessment of abstract qualities like consistency, planning quality, and creativity
-- **🔄 Multi-Provider Support**: OpenAI GPT, Anthropic Claude, Google Gemini, and mock providers
+- **🔄 Multi-Provider Support**: OpenAI GPT, Anthropic Claude, Google Gemini, DeepSeek, and mock providers
 - **📊 Rich Visualizations**: Automated generation of insightful charts and graphs
 - **⚡ High Performance**: Optimized for processing large event streams (~60 events/second)
 - **🧪 Comprehensive Testing**: Full test suite with 95%+ code coverage
@@ -89,6 +89,7 @@ pip install -r requirements.txt
 pip install openai>=1.0.0              # For OpenAI GPT
 pip install anthropic>=0.7.0           # For Anthropic Claude
 pip install google-generativeai>=0.3.0 # For Google Gemini
+# Note: DeepSeek uses OpenAI-compatible API, so openai package is sufficient
 ```
 
 ### Basic Usage
@@ -102,6 +103,9 @@ python run_evaluation.py --llm-eval --llm-provider mock
 
 # Run with OpenAI GPT-4
 python run_evaluation.py --llm-eval --llm-provider openai --api-key YOUR_API_KEY --llm-model gpt-4
+
+# Run with DeepSeek
+python run_evaluation.py --llm-eval --llm-provider deepseek --api-key YOUR_API_KEY --llm-model deepseek-chat
 
 # Run with specific metrics only
 python run_evaluation.py --llm-eval --llm-provider mock \
@@ -267,6 +271,18 @@ llm_config = {
 }
 ```
 
+### DeepSeek Configuration
+
+```python
+llm_config = {
+    'provider': 'deepseek',
+    'api_key': 'your-deepseek-api-key',
+    'model': 'deepseek-chat',  # Options: deepseek-chat, deepseek-coder
+    'temperature': 0.1,
+    'max_tokens': 1000
+}
+```
+
 ### Environment Variables
 
 ```bash
@@ -274,6 +290,7 @@ llm_config = {
 export OPENAI_API_KEY="your-openai-api-key"
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
 export GOOGLE_API_KEY="your-google-api-key"  # or GEMINI_API_KEY
+export DEEPSEEK_API_KEY="your-deepseek-api-key"
 ```
 
 ---
@@ -308,6 +325,51 @@ The framework processes JSON event stream data with the following structure:
 ]
 ```
 
+### Overall Structure
+
+- Total entries: 224 events
+- Starting point: ID 3 (as requested, ignoring first 2 IDs)
+- Key fields: id, timestamp, source, message, action, observation, args, tool_call_metadata, llm_metrics
+
+#### Task Boundaries (6 Tasks Total)
+
+Based on user messages and finish events:
+
+1. Task 1: IDs 4-20 (Dice rolling program)
+    - Start: ID 4 (user message)
+    - End: ID 20 (finish with task_completed=true)
+2. Task 2: IDs 22-41 (likely ends before Task 3 starts)
+    - Start: ID 22 (user message)
+    - End: Need to find (before ID 42)
+3. Task 3: IDs 42-77 (likely ends before Task 4 starts)
+    - Start: ID 42 (user message)
+    - End: Need to find (before ID 78)
+4. Task 4: IDs 78-130 (likely ends before Task 5 starts)
+    - Start: ID 78 (user message)
+    - End: Need to find (before ID 131)
+5. Task 5: IDs 131-167 (likely ends before Task 6 starts)
+    - Start: ID 131 (user message)
+    - End: Need to find (before ID 168)
+6. Task 6: IDs 168-222
+    - Start: ID 168 (user message)
+    - End: ID 222 (finish with task_completed=true)
+
+#### Entry Types and Sources
+
+- Sources: user, agent, environment
+- Agent actions: edit, run, finish, message, system, condensation
+- Environment observations: agent_state_changed, recall, edit, run
+
+#### Key Data for Evaluation
+
+For each step/ID, we can extract:
+
+1. Action Type: What the agent did (edit, run, think, etc.)
+2. Tool Usage: Which tools were called (from tool_call_metadata)
+3. Content: Actual code/commands executed (from args)
+4. Timing: Timestamps for duration analysis
+5. Success/Failure: From observations and error messages
+6. LLM Metrics: Token usage, costs (from llm_metrics)
 ### Required Fields
 - `id`: Unique event identifier
 - `timestamp`: ISO format timestamp
@@ -373,11 +435,11 @@ The framework processes JSON event stream data with the following structure:
 
 The framework automatically generates:
 
-- **📊 Task Overview**: Completion rates, duration distribution, step counts
-- **⚡ Efficiency Analysis**: Performance trends, optimization opportunities
-- **🔧 Tool Usage**: Distribution charts, efficiency heatmaps
-- **💰 LLM Usage**: Token consumption, cost analysis, provider comparison
-- **🧠 LLM Evaluation**: Qualitative metric scores, confidence intervals
+- **Task Overview**: Completion rates, duration distribution, step counts
+- **Efficiency Analysis**: Performance trends, optimization opportunities
+- **Tool Usage**: Distribution charts, efficiency heatmaps
+- **LLM Usage**: Token consumption, cost analysis, provider comparison
+- **LLM Evaluation**: Qualitative metric scores, confidence intervals
 
 ### 3. **Summary Statistics**
 
@@ -562,8 +624,6 @@ async def evaluate_agent():
 - Learning progress tracking
 
 ---
-
-
 
 ## 🙏 Acknowledgments
 

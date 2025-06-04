@@ -21,7 +21,7 @@ warnings.filterwarnings('ignore')
 
 # Import LLM evaluation components
 try:
-    from .llm_evaluator import (
+    from llm_evaluator import (
         LLMEvaluator, EvaluationMetric, EvaluationContext, 
         EvaluationResult, create_llm_evaluator
     )
@@ -64,6 +64,7 @@ class StepWiseEvaluator:
         self.task_metrics = []
         self.error_events = []
         self.llm_evaluation_results = {}
+        self.llm_evaluation_logs = []  # New: Store detailed LLM evaluation logs
         
         # Initialize LLM evaluator if available and configured
         self.llm_evaluator = None
@@ -71,7 +72,9 @@ class StepWiseEvaluator:
         if LLM_AVAILABLE and self.llm_config:
             try:
                 provider_type = self.llm_config.get('provider', 'mock')
-                self.llm_evaluator = create_llm_evaluator(provider_type, **self.llm_config)
+                # Filter out the 'provider' key before passing kwargs
+                provider_kwargs = {k: v for k, v in self.llm_config.items() if k != 'provider'}
+                self.llm_evaluator = create_llm_evaluator(provider_type, **provider_kwargs)
             except Exception as e:
                 print(f"Warning: Failed to initialize LLM evaluator: {e}")
         
@@ -81,57 +84,65 @@ class StepWiseEvaluator:
         self._calculate_task_metrics()
     
     def _identify_task_boundaries(self):
-        """Identify precise task boundaries from user messages and finish events."""
+        """Identify precise task boundaries from user messages and finish events automatically."""
         user_messages = []
         finish_events = []
         
+        # Collect all user messages and finish events
         for i, entry in enumerate(self.data):
             if entry.get('source') == 'user' and entry.get('action') == 'message':
                 user_messages.append((i, entry.get('id'), entry.get('message', '')))
             elif entry.get('action') == 'finish':
                 finish_events.append((i, entry.get('id'), entry.get('args', {}).get('task_completed')))
         
+        print(f"Found {len(user_messages)} user messages and {len(finish_events)} finish events")
+        
+        # Sort by ID to ensure proper order
+        user_messages.sort(key=lambda x: x[1])
+        finish_events.sort(key=lambda x: x[1])
+        
         # Match user messages with finish events
         self.task_boundaries = {}
+        
         for i, (msg_idx, msg_id, message) in enumerate(user_messages):
             task_num = i + 1
             start_id = msg_id
             
-            # Find corresponding finish event
+            # Find the corresponding finish event for this task
             end_id = None
-            if i < len(finish_events):
-                # For tasks 1, 2, 5, 6 which have clear finish events
-                if task_num in [1, 2, 5, 6]:
-                    if task_num == 1:
-                        end_id = 20
-                    elif task_num == 2:
-                        end_id = 41  # Need to find actual end
-                    elif task_num == 5:
-                        end_id = 166
-                    elif task_num == 6:
-                        end_id = 222
+            
+            # Look for finish events that come after this user message
+            # but before the next user message (if any)
+            next_user_id = user_messages[i + 1][1] if i + 1 < len(user_messages) else float('inf')
+            
+            # Find finish events between current user message and next user message
+            candidate_finish_events = [
+                (finish_idx, finish_id, task_completed) 
+                for finish_idx, finish_id, task_completed in finish_events
+                if start_id < finish_id < next_user_id
+            ]
+            
+            if candidate_finish_events:
+                # Use the last finish event in this range (closest to the next task)
+                end_id = candidate_finish_events[-1][1]
+            else:
+                # No finish event found, use the ID just before the next user message
+                if i + 1 < len(user_messages):
+                    end_id = user_messages[i + 1][1] - 1
                 else:
-                    # For overlapping tasks, find the boundary
-                    if task_num == 2:
-                        end_id = 41  # Before task 3 starts
-                    elif task_num == 3:
-                        end_id = 77  # Before task 4 starts
-                    elif task_num == 4:
-                        end_id = 130  # Before task 5 starts
+                    # Last task, use the last entry in the data
+                    end_id = self.data[-1].get('id')
             
-            if end_id is None and task_num < len(user_messages):
-                # End before next task starts
-                next_start = user_messages[task_num][1]
-                end_id = next_start - 1
-            elif end_id is None:
-                # Last task
-                end_id = self.data[-1].get('id')
-            
+            # Store task boundary
             self.task_boundaries[task_num] = {
                 'start_id': start_id,
                 'end_id': end_id,
                 'message': message[:100] + '...' if len(message) > 100 else message
             }
+            
+            print(f"Task {task_num}: IDs {start_id}-{end_id} | {message[:50]}...")
+        
+        print(f"Successfully identified {len(self.task_boundaries)} tasks")
     
     def _extract_step_metrics(self):
         """Extract detailed metrics for each step."""
@@ -552,6 +563,18 @@ class StepWiseEvaluator:
                 'learning_adaptability'
             ]
         
+        # Initialize LLM evaluation logs
+        self.llm_evaluation_logs = {
+            'evaluation_metadata': {
+                'timestamp': datetime.now().isoformat(),
+                'llm_provider': self.llm_evaluator.provider.__class__.__name__,
+                'llm_model': self.llm_evaluator.provider.model,
+                'metrics_evaluated': selected_metrics,
+                'total_tasks': len(self.task_boundaries)
+            },
+            'detailed_logs': []
+        }
+        
         evaluation_results = {}
         
         for task_id in self.task_boundaries.keys():
@@ -578,6 +601,19 @@ class StepWiseEvaluator:
                 similar_tasks=similar_tasks
             )
             
+            # Create task log entry
+            task_log = {
+                'task_id': task_id,
+                'task_description': task_boundary['message'],
+                'task_context': {
+                    'total_steps': len(task_steps),
+                    'code_length': len(code_generated),
+                    'error_count': len(task_errors),
+                    'similar_tasks_count': len(similar_tasks)
+                },
+                'metric_evaluations': []
+            }
+            
             # Evaluate each selected metric
             task_results = {}
             for metric_name in selected_metrics:
@@ -590,7 +626,37 @@ class StepWiseEvaluator:
                     if metric in [EvaluationMetric.CONSISTENCY, EvaluationMetric.LEARNING_ADAPTABILITY] and not similar_tasks:
                         continue
                     
+                    # Get the prompt that will be sent to the LLM
+                    prompt = self.llm_evaluator._get_prompt_for_metric(metric, context)
+                    
+                    # Log the evaluation start
+                    evaluation_start = datetime.now()
+                    
+                    # Perform the evaluation
                     result = await self.llm_evaluator.evaluate_metric(metric, context)
+                    
+                    # Log the evaluation end
+                    evaluation_end = datetime.now()
+                    evaluation_duration = (evaluation_end - evaluation_start).total_seconds()
+                    
+                    # Create detailed log entry for this metric evaluation
+                    metric_log = {
+                        'metric': metric_name,
+                        'timestamp': evaluation_start.isoformat(),
+                        'duration_seconds': evaluation_duration,
+                        'prompt': prompt,
+                        'response': {
+                            'score': result.score,
+                            'reasoning': result.reasoning,
+                            'confidence': result.confidence,
+                            'details': result.details
+                        },
+                        'raw_llm_response': getattr(result, 'raw_response', None),
+                        'status': 'success' if result.score > 0 else 'partial_success'
+                    }
+                    
+                    task_log['metric_evaluations'].append(metric_log)
+                    
                     task_results[metric_name] = {
                         'score': result.score,
                         'reasoning': result.reasoning,
@@ -600,12 +666,29 @@ class StepWiseEvaluator:
                     
                 except Exception as e:
                     print(f"Error evaluating {metric_name} for task {task_id}: {e}")
+                    
+                    # Log the error
+                    error_log = {
+                        'metric': metric_name,
+                        'timestamp': datetime.now().isoformat(),
+                        'duration_seconds': 0,
+                        'prompt': getattr(self.llm_evaluator, '_get_prompt_for_metric', lambda m, c: 'Prompt generation failed')(metric, context) if hasattr(self.llm_evaluator, '_get_prompt_for_metric') else 'Prompt unavailable',
+                        'response': None,
+                        'error': str(e),
+                        'status': 'error'
+                    }
+                    
+                    task_log['metric_evaluations'].append(error_log)
+                    
                     task_results[metric_name] = {
                         'score': 5.0,
                         'reasoning': f"Evaluation failed: {str(e)}",
                         'confidence': 0.0,
                         'details': {}
                     }
+            
+            # Add task log to detailed logs
+            self.llm_evaluation_logs['detailed_logs'].append(task_log)
             
             evaluation_results[f'task_{task_id}'] = task_results
         
@@ -629,6 +712,22 @@ class StepWiseEvaluator:
                     'average_confidence': np.mean(confidences),
                     'scores_per_task': scores
                 }
+        
+        # Add summary statistics to logs
+        self.llm_evaluation_logs['evaluation_summary'] = {
+            'total_evaluations': sum(len(task_log['metric_evaluations']) for task_log in self.llm_evaluation_logs['detailed_logs']),
+            'successful_evaluations': sum(1 for task_log in self.llm_evaluation_logs['detailed_logs'] 
+                                        for eval_log in task_log['metric_evaluations'] 
+                                        if eval_log['status'] == 'success'),
+            'failed_evaluations': sum(1 for task_log in self.llm_evaluation_logs['detailed_logs'] 
+                                    for eval_log in task_log['metric_evaluations'] 
+                                    if eval_log['status'] == 'error'),
+            'average_duration_per_evaluation': np.mean([eval_log['duration_seconds'] 
+                                                      for task_log in self.llm_evaluation_logs['detailed_logs'] 
+                                                      for eval_log in task_log['metric_evaluations']
+                                                      if eval_log['status'] != 'error']),
+            'aggregate_scores': aggregate_scores
+        }
         
         return {
             'task_results': evaluation_results,

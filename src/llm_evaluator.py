@@ -206,6 +206,52 @@ class GeminiProvider(LLMProvider):
             return {"error": str(e)}
 
 
+class DeepSeekProvider(LLMProvider):
+    """DeepSeek provider for evaluation."""
+    
+    def __init__(self, api_key: str = None, model: str = "deepseek-chat"):
+        super().__init__(api_key, model)
+        self.api_key = api_key or os.getenv('DEEPSEEK_API_KEY')
+        self.base_url = "https://api.deepseek.com/v1"
+    
+    def validate_config(self) -> bool:
+        """Validate DeepSeek configuration."""
+        return self.api_key is not None
+    
+    async def evaluate(self, prompt: str, context: EvaluationContext) -> Dict[str, Any]:
+        """Evaluate using DeepSeek."""
+        try:
+            import openai
+            
+            if not self.validate_config():
+                raise ValueError("DeepSeek API key not provided")
+            
+            # Create client with DeepSeek endpoint
+            client = openai.AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url
+            )
+            
+            response = await client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are an expert evaluator of AI agent performance. Provide detailed, objective evaluations."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=1000
+            )
+            
+            return {"response": response.choices[0].message.content}
+            
+        except ImportError:
+            logger.error("OpenAI library not installed. Install with: pip install openai")
+            return {"error": "OpenAI library not available (required for DeepSeek)"}
+        except Exception as e:
+            logger.error(f"DeepSeek evaluation error: {str(e)}")
+            return {"error": str(e)}
+
+
 class MockLLMProvider(LLMProvider):
     """Mock LLM provider for testing and development."""
     
@@ -652,6 +698,7 @@ def create_llm_evaluator(provider_type: str = "mock", **kwargs) -> LLMEvaluator:
         "openai": OpenAIProvider,
         "anthropic": AnthropicProvider,
         "gemini": GeminiProvider,
+        "deepseek": DeepSeekProvider,
         "mock": MockLLMProvider
     }
     
